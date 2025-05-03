@@ -1,0 +1,31 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment files
+.env
+.env.*
+
+# Database
+*.db
+*.sqlite
+
+# Alembic migrations (keep alembic.ini but ignore versions)
+migrations/versions/
+
+# Other
+face_encodings.pkl  # Add if this is a large binary file
