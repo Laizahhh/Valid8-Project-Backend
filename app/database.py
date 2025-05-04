@@ -12,7 +12,10 @@ logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:new_secure_password123!@localhost:5432/fastapi_db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is not set")
+
 
 engine = create_engine(
     DATABASE_URL,
