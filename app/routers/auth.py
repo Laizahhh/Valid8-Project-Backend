@@ -28,23 +28,21 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Get user roles
-    role_names = [ur.role.name for ur in user.roles if ur.role]
+    # Get user roles (ensure this includes admin if applicable)
+    role_names = [ur.role.name for ur in user.roles]
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={
             "sub": user.email,
             "roles": role_names,
-            "user_id": user.id
+            "user_id": user.id,
+            "is_admin": "admin" in role_names  # Explicit admin flag
         },
         expires_delta=access_token_expires
     )
     
-    return {
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/login", response_model=Token)
 async def login_with_email(
@@ -59,15 +57,16 @@ async def login_with_email(
             detail="Incorrect email or password"
         )
     
-    # Get user roles
-    role_names = [ur.role.name for ur in user.roles if ur.role]
+    # Get user roles (ensure eager loading is working)
+    role_names = [ur.role.name for ur in user.roles]
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={
             "sub": user.email,
             "roles": role_names,
-            "user_id": user.id
+            "user_id": user.id,
+            "is_admin": "admin" in role_names  # Explicit admin flag
         },
         expires_delta=access_token_expires
     )
@@ -79,5 +78,6 @@ async def login_with_email(
         "roles": role_names,
         "user_id": user.id,
         "first_name": user.first_name,
-        "last_name": user.last_name
+        "last_name": user.last_name,
+        "is_admin": "admin" in role_names  # Frontend can use this
     }

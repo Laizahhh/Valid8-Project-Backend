@@ -20,6 +20,7 @@ class Event(Base):
     end_datetime = Column(DateTime, nullable=False)
     status = Column(Enum(EventStatus), nullable=False, default=EventStatus.UPCOMING)
     
+    
     # Many-to-many relationships
     departments = relationship(
         "Department", 
@@ -39,4 +40,9 @@ class Event(Base):
         secondary=event_ssg_association,
         back_populates="assigned_events",
         lazy="joined"
+    )
+    attendances = relationship(
+       "Attendance",
+       back_populates="event",
+       cascade="all, delete-orphan"
     )
