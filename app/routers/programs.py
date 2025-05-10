@@ -1,146 +1,188 @@
-# app/routers/program.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from typing import List
 import logging
 
 from app.database import get_db
 from app.models.program import Program as ProgramModel
 from app.models.department import Department as DepartmentModel
-from app.schemas.program import Program, ProgramCreate, ProgramWithRelations
+from app.schemas.program import Program, ProgramCreate, ProgramUpdate  # Removed ProgramWithRelations
 
 router = APIRouter(prefix="/programs", tags=["programs"])
 logger = logging.getLogger(__name__)
 
+# 1. CREATE PROGRAM (Now returns flat structure)
 @router.post("/", response_model=Program, status_code=status.HTTP_201_CREATED)
 def create_program(program: ProgramCreate, db: Session = Depends(get_db)):
     try:
-        # Normalize the program name first
-        program_name = program.name.strip().lower()  # <-- Add this line
-        logger.info(f"Attempting to create program: {program_name}")  # <-- Change to program_name
-
-        # Check if program already exists with case-insensitive comparison
-        existing_program = db.query(ProgramModel).filter(
-            ProgramModel.name.ilike(program_name)  # <-- Change to program_name
-        ).first()
+        program_name = program.name.strip()
         
-        if existing_program:
-            logger.warning(f"Program already exists: {program_name}")  # <-- Change to program_name
+        # Check for existing program
+        if db.query(ProgramModel).filter(
+            func.lower(ProgramModel.name) == func.lower(program_name)
+        ).first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Program with name '{program_name}' already exists"  # <-- Change to program_name
+                detail=f"Program '{program_name}' already exists"
             )
 
-        # Create new program instance with normalized name
-        new_program = ProgramModel(name=program_name)  # <-- Change to program_name
+        new_program = ProgramModel(name=program_name)
         db.add(new_program)
-        db.flush()
+        db.flush()  # Get ID before commit
         
-        # Rest of your function remains the same...
+        # Handle department associations (still needed for DB)
         if program.department_ids:
-            logger.info(f"Looking up departments: {program.department_ids}")
             departments = db.query(DepartmentModel).filter(
                 DepartmentModel.id.in_(program.department_ids)
             ).all()
             
-            # Verify all departments exist
             if len(departments) != len(program.department_ids):
-                found_ids = {d.id for d in departments}
-                missing_ids = set(program.department_ids) - found_ids
-                logger.warning(f"Missing departments: {missing_ids}")
+                missing = set(program.department_ids) - {d.id for d in departments}
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Departments not found: {missing_ids}"
+                    detail=f"Departments not found: {missing}"
                 )
-            
-            # Clear existing relationships and set new ones
             new_program.departments = departments
-            logger.info(f"Assigned departments: {[d.id for d in departments]}")
         
-        # Commit transaction
         db.commit()
         db.refresh(new_program)
         
-        # Log database state after commit
-        logger.info(f"Database state after commit:")
-        logger.info(f"Program ID: {new_program.id}, Name: {new_program.name}")
-        logger.info(f"Associated department IDs: {[d.id for d in new_program.departments]}")
-        
-        # Create response
-        result = Program(
-            id=new_program.id,
-            name=new_program.name,
-            department_ids=[d.id for d in new_program.departments]
-        )
-        
-        logger.info(f"Successfully created program: {result.name} (ID: {result.id})")
-        logger.info(f"Response department_ids: {result.department_ids}")
-        
-        return result
+        # Manually set department_ids for response
+        new_program.department_ids = [d.id for d in new_program.departments]
+        return new_program
 
     except HTTPException:
         db.rollback()
         raise
-    except IntegrityError as e:
-        db.rollback()
-        logger.error(f"Integrity error creating program: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Program creation failed (possible duplicate name)"
-        )
-    except SQLAlchemyError as e:
-        db.rollback()
-        logger.error(f"Database error creating program: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database error while creating program"
-        )
     except Exception as e:
         db.rollback()
-        logger.error(f"Unexpected error creating program: {str(e)}", exc_info=True)
+        logger.error(f"Error creating program: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An unexpected error occurred: {str(e)}"
+            detail="Failed to create program"
         )
 
+# 2. READ ALL PROGRAMS (Flat)
 @router.get("/", response_model=List[Program])
-def read_programs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    programs = db.query(ProgramModel).offset(skip).limit(limit).all()
-    
-    # Log the actual database contents
-    for program in programs:
-        logger.info(f"Program ID: {program.id}, Name: {program.name}")
-        logger.info(f"Department IDs: {[d.id for d in program.departments]}")
-    
-    # Create response objects with explicit department_ids
-    results = []
-    for program in programs:
-        results.append(Program(
-            id=program.id,
-            name=program.name,
-            department_ids=[d.id for d in program.departments]
-        ))
-    
-    return results
+def read_programs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db)
+):
+    try:
+        programs = db.query(ProgramModel).offset(skip).limit(limit).all()
+        # Add department_ids to each program
+        for program in programs:
+            program.department_ids = [d.id for d in program.departments]
+        return programs
+    except Exception as e:
+        logger.error(f"Error fetching programs: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch programs"
+        )
 
-@router.get("/{program_id}", response_model=ProgramWithRelations)
+# 3. READ SINGLE PROGRAM (Flat)
+@router.get("/{program_id}", response_model=Program)
 def read_program(program_id: int, db: Session = Depends(get_db)):
-    program = db.query(ProgramModel).filter(ProgramModel.id == program_id).first()
+    program = db.query(ProgramModel).get(program_id)
     if not program:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Program not found"
         )
-    
-    # Log actual relationships from database
-    logger.info(f"Retrieved program: ID={program.id}, Name={program.name}")
-    logger.info(f"Associated departments: {[d.id for d in program.departments]}")
-    
-    # Create response with explicitly loaded relationships
-    return ProgramWithRelations(
-        id=program.id,
-        name=program.name,
-        department_ids=[d.id for d in program.departments],
-        departments=program.departments
-    )
+    # Add department_ids
+    program.department_ids = [d.id for d in program.departments]
+    return program
+
+# 4. UPDATE PROGRAM (Flat)
+@router.patch("/{program_id}", response_model=Program)
+def update_program(
+    program_id: int,
+    program_update: ProgramUpdate,
+    db: Session = Depends(get_db)
+):
+    try:
+        db_program = db.query(ProgramModel).get(program_id)
+        if not db_program:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Program not found"
+            )
+
+        # Update name
+        if program_update.name is not None:
+            new_name = program_update.name.strip()
+            if db.query(ProgramModel).filter(
+                func.lower(ProgramModel.name) == func.lower(new_name),
+                ProgramModel.id != program_id
+            ).first():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Program '{new_name}' already exists"
+                )
+            db_program.name = new_name
+
+        # Update departments (still needed for DB)
+        if program_update.department_ids is not None:
+            db_program.departments = []
+            if program_update.department_ids:
+                departments = db.query(DepartmentModel).filter(
+                    DepartmentModel.id.in_(program_update.department_ids)
+                ).all()
+                if len(departments) != len(program_update.department_ids):
+                    missing = set(program_update.department_ids) - {d.id for d in departments}
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Departments not found: {missing}"
+                    )
+                db_program.departments = departments
+        
+        db.commit()
+        db.refresh(db_program)
+        db_program.department_ids = [d.id for d in db_program.departments]
+        return db_program
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating program: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update program"
+        )
+
+
+# 5. DELETE PROGRAM
+@router.delete("/{program_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_program(program_id: int, db: Session = Depends(get_db)):
+    try:
+        program = db.query(ProgramModel).get(program_id)
+        if not program:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Program not found"
+            )
+
+        db.delete(program)
+        db.commit()
+        return None
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"Integrity error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete program - it's referenced by other records"
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting program: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete program"
+        )
