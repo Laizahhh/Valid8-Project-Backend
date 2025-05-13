@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import users, events, programs, departments, auth 
+from app.routers import users, events, programs, departments, auth, attendance 
 from app.services.face_recognition import FaceRecognitionService
 
 
@@ -9,7 +9,7 @@ app = FastAPI()
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,6 +21,7 @@ app.include_router(events.router)
 app.include_router(programs.router)
 app.include_router(departments.router)
 app.include_router(auth.router)
+app.include_router(attendance.router)
 
 # Load face encodings at startup
 face_service = FaceRecognitionService()
