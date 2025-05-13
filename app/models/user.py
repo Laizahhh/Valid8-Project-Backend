@@ -44,6 +44,7 @@ class UserRole(Base):
     user = relationship("User", back_populates="roles")
     role = relationship("Role")
 
+# app/models/user.py (StudentProfile class)
 class StudentProfile(Base):
     __tablename__ = "student_profiles"
     
@@ -52,9 +53,10 @@ class StudentProfile(Base):
     student_id = Column(String(50), unique=True, index=True)
     department_id = Column(Integer, ForeignKey("departments.id", ondelete="RESTRICT"), index=True)
     program_id = Column(Integer, ForeignKey("programs.id", ondelete="RESTRICT"), index=True)
-    year_level = Column(Integer, nullable=False, default=1)  # Add this line
-    face_encoding = Column(String(2000))  # Increased length for encoding storage
+    year_level = Column(Integer, nullable=False, default=1)
+    face_encoding = Column(String(2000))
     
+    # Relationships
     user = relationship("User", back_populates="student_profile")
     attendances = relationship("Attendance", back_populates="student", cascade="all, delete-orphan")
 
