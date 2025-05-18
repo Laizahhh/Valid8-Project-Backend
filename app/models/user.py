@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 from datetime import datetime
@@ -54,11 +54,32 @@ class StudentProfile(Base):
     department_id = Column(Integer, ForeignKey("departments.id", ondelete="RESTRICT"), index=True)
     program_id = Column(Integer, ForeignKey("programs.id", ondelete="RESTRICT"), index=True)
     year_level = Column(Integer, nullable=False, default=1)
-    face_encoding = Column(String(2000))
+    face_encoding = Column(LargeBinary)  # Changed from String(2000) to LargeBinary
+
+      # Add these:
+    is_face_registered = Column(Boolean, default=False, index=True)
+    face_image_url = Column(String(500), nullable=True)  # Made nullable
+    registration_complete = Column(Boolean, default=False, index=True)
+    
+    # Consider adding:
+    section = Column(String(50), nullable=True, index=True)  # Made nullable
+    rfid_tag = Column(String(100), unique=True, nullable=True)  # Alternative auth  
+    last_face_update = Column(DateTime, nullable=True)  # Added this missing field
     
     # Relationships
     user = relationship("User", back_populates="student_profile")
     attendances = relationship("Attendance", back_populates="student", cascade="all, delete-orphan")
+
+    
+    # ===== ADD THIS METHOD =====
+    def update_face_encoding(self, embedding: bytes):
+        """Safe update of face data"""
+        if len(embedding) > 2048:  # Sanity check for embedding size
+            raise ValueError("Face embedding too large (max 2048 bytes)")
+        self.face_encoding = embedding
+        self.is_face_registered = True
+        self.last_face_update = datetime.utcnow()
+    # ==========================
 
 class SSGProfile(Base):
     __tablename__ = "ssg_profiles"
@@ -72,5 +93,4 @@ class SSGProfile(Base):
         "Event",
         secondary=event_ssg_association,
         back_populates="ssg_members",
-        lazy="joined"
     )

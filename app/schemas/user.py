@@ -5,7 +5,10 @@ from typing import List, Optional, ForwardRef
 from enum import Enum
 from datetime import datetime
 from app.schemas.role import Role
-from app.schemas.attendance import Attendance
+from app.models.user import StudentProfile
+from app.models.attendance import Attendance
+from app.schemas.attendance import Attendance  # Now safe to import
+
 
 class RoleEnum(str, Enum):
     student = "student"
@@ -53,6 +56,13 @@ class StudentProfileBase(BaseModel):
         le=5,
         description="Year level must be between 1 and 5"
     )
+# To this (correct):
+class StudentProfileWithAttendances(StudentProfileBase):
+    id: int
+    attendances: List["Attendance"] = []  # String literal
+    
+    class Config:
+        from_attributes = True
 
 class SSGProfileBase(BaseModel):
     position: SSGPositionEnum = Field(
@@ -189,4 +199,6 @@ class UserWithRelations(User):
     ssg_profile: Optional[SSGProfile] = None
 
 # Resolve forward references
+User.update_forward_refs()
 SSGProfile.update_forward_refs()
+StudentProfileWithAttendances.update_forward_refs()

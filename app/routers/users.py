@@ -21,7 +21,8 @@ from app.schemas.user import (
     StudentProfileBase,          # New import (if you're using it)
     SSGProfileBase           # New import (if you're using it)
 )
-from app.schemas.event import Event
+from app.models.event import Event  # SQLAlchemy model ✅
+from app.schemas.event import Event as EventSchema  # Pydantic schema for response ✅
 from app.models.user import User as UserModel, UserRole, StudentProfile, SSGProfile
 from app.models.role import Role
 from app.models.attendance import Attendance
@@ -30,6 +31,8 @@ from app.database import get_db
 from app.core.security import create_access_token
 from sqlalchemy.orm import joinedload
 from app.models.associations import program_department_association
+from sqlalchemy.exc import SQLAlchemyError
+from fastapi import Body
 
 router = APIRouter(prefix="/users", tags=["users"])
 face_service = FaceRecognitionService()
@@ -696,33 +699,53 @@ def reset_user_password(
     
     return None    
 
-@router.post("/events/{event_id}/ssg-members", response_model=Event)
+@router.post("/events/{event_id}/ssg-members", response_model=EventSchema)
 def assign_ssg_members_to_event(
     event_id: int,
-    ssg_member_ids: List[int],
+    ssg_member_ids: List[int] = Body(..., embed=True),
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user_with_roles)
+    current_user: User = Depends(get_current_user_with_roles)
 ):
     """Assign SSG members to an event"""
-    # Check permissions
-    required_roles = ["admin", "event-organizer"]
-    if not has_required_roles(current_user, required_roles):
-        raise HTTPException(403, "Insufficient permissions")
+    try:
+        # Check permissions
+        required_roles = ["admin", "event-organizer"]
+        if not has_required_roles(current_user, required_roles):
+            raise HTTPException(403, "Insufficient permissions")
 
-    # Get the event
-    event = db.query(Event).get(event_id)
-    if not event:
-        raise HTTPException(404, "Event not found")
+        # Get the event - using MODEL class
+        event = db.query(Event).options(
+            joinedload(Event.ssg_members)
+        ).get(event_id)
+        
+        if not event:
+            raise HTTPException(404, "Event not found")
 
-    # Clear existing assignments
-    event.ssg_members = []
+        # Verify all SSG members exist
+        existing_members = db.query(SSGProfile.id).filter(
+            SSGProfile.id.in_(ssg_member_ids)
+        ).all()
+        
+        existing_ids = {m[0] for m in existing_members}
+        missing_ids = set(ssg_member_ids) - existing_ids
+        
+        if missing_ids:
+            raise HTTPException(400, f"Invalid SSG member IDs: {missing_ids}")
 
-    # Add new assignments
-    for member_id in ssg_member_ids:
-        member = db.query(SSGProfile).filter(SSGProfile.user_id == member_id).first()
-        if member:
-            event.ssg_members.append(member)
+        # Clear existing and assign new members
+        event.ssg_members = []
+        for member_id in ssg_member_ids:
+            member = db.query(SSGProfile).get(member_id)
+            if member:
+                event.ssg_members.append(member)
 
-    db.commit()
-    db.refresh(event)
-    return event    
+        db.commit()
+        db.refresh(event)
+        return event
+        
+    except SQLAlchemyError as e:
+        db.rollback()
+        raise HTTPException(500, "Database error") from e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e)) from e

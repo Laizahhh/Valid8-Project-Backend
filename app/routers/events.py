@@ -37,7 +37,7 @@ def create_event(
     """Create a new event"""
     try:
         # Validate permissions
-        if not any(role.role.name in ["ssg", "admin"] for role in current_user.roles):
+        if not any(role.role.name in ["ssg", "admin", "event-organizer"] for role in current_user.roles):
             raise HTTPException(status_code=403, detail="Not authorized to create events")
         
         # Validate datetime
