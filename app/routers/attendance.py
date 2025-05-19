@@ -144,7 +144,7 @@ def record_manual_attendance(
     attendance = AttendanceModel(
         student_id=student.id,
         event_id=data.event_id,
-        time_in=datetime.utcnow(),
+        time_in=datetime.now(),
         method="manual",
         status="present",  # Use direct string
         verified_by=current_user.id,
@@ -330,8 +330,9 @@ def record_time_out(
         raise HTTPException(400, "Time-out already recorded")
     
     # Record time-out
-    attendance.time_out = datetime.utcnow()
+    attendance.time_out = datetime.now()
     db.commit()
+
     
     # Calculate duration
     duration_seconds = (attendance.time_out - attendance.time_in).total_seconds()
