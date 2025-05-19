@@ -144,7 +144,7 @@ def record_manual_attendance(
     attendance = AttendanceModel(
         student_id=student.id,
         event_id=data.event_id,
-        time_in=datetime.now(),
+        time_in=datetime.utcnow(),
         method="manual",
         status="present",  # Use direct string
         verified_by=current_user.id,
@@ -157,8 +157,7 @@ def record_manual_attendance(
     
     return {
         "message": f"Recorded attendance for {data.student_id}",
-        "attendance_id": attendance.id
-    }
+        "attendance_id": attendance.id}
 
 # 4. Bulk attendance
 @router.post("/bulk")
@@ -330,9 +329,8 @@ def record_time_out(
         raise HTTPException(400, "Time-out already recorded")
     
     # Record time-out
-    attendance.time_out = datetime.now()
+    attendance.time_out = datetime.utcnow()
     db.commit()
-
     
     # Calculate duration
     duration_seconds = (attendance.time_out - attendance.time_in).total_seconds()
@@ -343,8 +341,7 @@ def record_time_out(
         "attendance_id": attendance_id,
         "time_in": attendance.time_in,
         "time_out": attendance.time_out,
-        "duration_minutes": duration_minutes
-    }
+        "duration_minutes": duration_minutes}
 
 @router.post("/face-scan-timeout")
 def record_face_scan_timeout(
