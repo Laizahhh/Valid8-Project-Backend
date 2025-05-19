@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from pydantic import BaseModel
 
@@ -144,7 +144,7 @@ def record_manual_attendance(
     attendance = AttendanceModel(
         student_id=student.id,
         event_id=data.event_id,
-        time_in=datetime.utcnow(),
+        time_in=datetime.now(timezone.utc),
         method="manual",
         status="present",  # Use direct string
         verified_by=current_user.id,
@@ -329,7 +329,7 @@ def record_time_out(
         raise HTTPException(400, "Time-out already recorded")
     
     # Record time-out
-    attendance.time_out = datetime.utcnow()
+    attendance.time_out = datetime.now(timezone.utc)
     db.commit()
     
     # Calculate duration

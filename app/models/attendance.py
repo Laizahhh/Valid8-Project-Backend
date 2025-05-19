@@ -4,13 +4,17 @@ from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from enum import Enum as PyEnum
 from app.models.base import Base
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 
 class AttendanceStatus(PyEnum):
     PRESENT = "present"  # Must match database exactly
     ABSENT = "absent"
     EXCUSED = "excused"
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
 
 class Attendance(Base):
     __tablename__ = "attendances"
