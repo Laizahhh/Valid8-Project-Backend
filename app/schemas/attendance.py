@@ -1,8 +1,10 @@
 # app/schemas/attendance.py
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict
 from enum import Enum
+from fastapi import Query
+from sqlalchemy import func, case
 
 class AttendanceMethod(str, Enum):
     FACE_SCAN = "face_scan"
@@ -52,4 +54,36 @@ class Attendance(AttendanceBase):
 class AttendanceWithStudent(BaseModel):
     attendance: Attendance
     student_id: str
-    student_name: str     
+    student_name: str    
+
+
+class StudentAttendanceRecord(BaseModel):
+    id: int
+    event_id: int
+    event_name: str  # We'll add this from the event model
+    time_in: datetime
+    time_out: Optional[datetime] = None
+    status: AttendanceStatus
+    method: AttendanceMethod
+    notes: Optional[str] = None
+    duration_minutes: Optional[int] = None  # Calculated field
+
+    class Config:
+        from_attributes = True
+
+class StudentAttendanceResponse(BaseModel):
+    student_id: str
+    student_name: str
+    total_records: int
+    attendances: List[StudentAttendanceRecord]    
+
+class AttendanceReportResponse(BaseModel):
+    event_name: str
+    event_date: str
+    event_location: str
+    total_participants: int
+    attendees: int
+    absentees: int
+    attendance_rate: float
+    programs: List[Dict[str, str]]  # For program filter dropdown
+    program_breakdown: List[Dict[str, str]]  # For program-specific stats

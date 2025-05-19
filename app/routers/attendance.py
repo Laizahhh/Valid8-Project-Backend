@@ -1,18 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel
 
 from app.models.user import User as UserModel
 from app.models.attendance import Attendance as AttendanceModel
 from app.models.user import StudentProfile
-from app.schemas.attendance import AttendanceStatus, Attendance, AttendanceWithStudent
+from app.schemas.attendance import AttendanceStatus, Attendance, AttendanceWithStudent, StudentAttendanceRecord, StudentAttendanceResponse, AttendanceReportResponse
 from app.models.attendance import Attendance as AttendanceModel
 from app.database import get_db
 from app.core.security import get_current_user
 from app.models.user import User  # Add this import
+from app.models.event import Event  # This imports your Event model
+from app.models.program import Program  # This imports your Event model
+from app.models.associations import event_program_association  # This imports your Event model
+
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
@@ -393,20 +397,38 @@ def record_face_scan_timeout(
         "duration_minutes": duration_minutes
     }    
 
-@router.get("/events/{event_id}/attendances", response_model=List[Attendance])
+@router.get("/events/{event_id}/attendances", response_model=List[AttendanceWithStudent])
 def get_attendances_by_event(
     event_id: int,
+    active_only: bool = Query(True, description="Only show active attendances (no time_out)"),
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    """Get all attendance records for a specific event"""
-    return db.query(AttendanceModel)\
-            .filter(AttendanceModel.event_id == event_id)\
-            .order_by(AttendanceModel.time_in.desc())\
-            .offset(skip)\
-            .limit(limit)\
-            .all()
+    """Get all attendance records for a specific event with student details"""
+    query = db.query(
+        AttendanceModel,
+        StudentProfile.student_id,
+        User.first_name,
+        User.last_name
+    )\
+    .join(StudentProfile, AttendanceModel.student_id == StudentProfile.id)\
+    .join(User, StudentProfile.user_id == User.id)\
+    .filter(AttendanceModel.event_id == event_id)
+    
+    if active_only:
+        query = query.filter(AttendanceModel.time_out.is_(None))
+    
+    results = query.order_by(AttendanceModel.time_in.desc())\
+                  .offset(skip)\
+                  .limit(limit)\
+                  .all()
+
+    return [AttendanceWithStudent(
+        attendance=attendance,
+        student_id=student_id,
+        student_name=f"{first_name} {last_name}"
+    ) for attendance, student_id, first_name, last_name in results]
 
 @router.get("/events/{event_id}/attendances/{status}", response_model=List[Attendance])
 def get_attendances_by_event_and_status(
@@ -449,3 +471,427 @@ def get_attendances_with_students(
         student_id=student_id,
         student_name=f"{first_name} {last_name}"
     ) for attendance, student_id, first_name, last_name in results]
+
+@router.get("/students/records", response_model=List[StudentAttendanceResponse])
+def get_all_student_attendance_records(
+    student_ids: List[str] = Query(None, description="Filter by specific student IDs"),
+    event_id: Optional[int] = Query(None, description="Filter by event ID"),
+    status: Optional[AttendanceStatus] = Query(None, description="Filter by status"),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Get comprehensive attendance records for students with filtering options
+    Requires admin or ssg role
+    """
+    # Check permissions
+    if not any(role.role.name in ["admin", "ssg"] for role in current_user.roles):
+        raise HTTPException(status_code=403, detail="Requires admin or SSG role")
+
+    # Base query joining all necessary tables
+    query = db.query(
+        AttendanceModel,
+        StudentProfile.student_id,
+        User.first_name,
+        User.last_name,
+        Event.name.label('event_name')
+    ).join(
+        StudentProfile, AttendanceModel.student_id == StudentProfile.id
+    ).join(
+        User, StudentProfile.user_id == User.id
+    ).join(
+        Event, AttendanceModel.event_id == Event.id
+    )
+
+    # Apply filters
+    if student_ids:
+        query = query.filter(StudentProfile.student_id.in_(student_ids))
+    if event_id:
+        query = query.filter(AttendanceModel.event_id == event_id)
+    if status:
+        query = query.filter(AttendanceModel.status == status)
+
+    # Execute query
+    results = query.order_by(
+        StudentProfile.student_id,
+        AttendanceModel.time_in.desc()
+    ).offset(skip).limit(limit).all()
+
+    # Group results by student
+    student_records = {}
+    for attendance, student_id, first_name, last_name, event_name in results:
+        # Calculate duration if time_out exists
+        duration = None
+        if attendance.time_out:
+            duration = int((attendance.time_out - attendance.time_in).total_seconds() / 60)
+
+        record = StudentAttendanceRecord(
+            id=attendance.id,
+            event_id=attendance.event_id,
+            event_name=event_name,
+            time_in=attendance.time_in,
+            time_out=attendance.time_out,
+            status=attendance.status,
+            method=attendance.method,
+            notes=attendance.notes,
+            duration_minutes=duration
+        )
+
+        if student_id not in student_records:
+            student_records[student_id] = {
+                'student_id': student_id,
+                'student_name': f"{first_name} {last_name}",
+                'attendances': []
+            }
+        student_records[student_id]['attendances'].append(record)
+
+    # Convert to response format
+    response = []
+    for student_id, data in student_records.items():
+        response.append(StudentAttendanceResponse(
+            student_id=student_id,
+            student_name=data['student_name'],
+            total_records=len(data['attendances']),
+            attendances=data['attendances']
+        ))
+
+    return response
+
+@router.get("/students/{student_id}/records", response_model=StudentAttendanceResponse)
+def get_student_attendance_records(
+    student_id: str,
+    event_id: Optional[int] = Query(None),
+    status: Optional[AttendanceStatus] = Query(None),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Get all attendance records for a specific student"""
+    # Permission check - allow students to view their own records
+    user_roles = [role.role.name for role in current_user.roles]
+    if "student" in user_roles and current_user.student_profile.student_id != student_id:
+        raise HTTPException(403, "Can only view your own records")
+
+    student = db.query(StudentProfile).filter(
+        StudentProfile.student_id == student_id
+    ).first()
+
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    # Query attendances with event names
+    query = db.query(
+        AttendanceModel,
+        Event.name.label('event_name')
+    ).join(
+        Event, AttendanceModel.event_id == Event.id
+    ).filter(
+        AttendanceModel.student_id == student.id
+    )
+
+    if event_id:
+        query = query.filter(AttendanceModel.event_id == event_id)
+    if status:
+        query = query.filter(AttendanceModel.status == status)
+
+    results = query.order_by(
+        AttendanceModel.time_in.desc()
+    ).offset(skip).limit(limit).all()
+
+    # Process results
+    attendances = []
+    for attendance, event_name in results:
+        duration = None
+        if attendance.time_out:
+            duration = int((attendance.time_out - attendance.time_in).total_seconds() / 60)
+
+        attendances.append(StudentAttendanceRecord(
+            id=attendance.id,
+            event_id=attendance.event_id,
+            event_name=event_name,
+            time_in=attendance.time_in,
+            time_out=attendance.time_out,
+            status=attendance.status,
+            method=attendance.method,
+            notes=attendance.notes,
+            duration_minutes=duration
+        ))
+
+    return StudentAttendanceResponse(
+        student_id=student_id,
+        student_name=f"{student.user.first_name} {student.user.last_name}",
+        total_records=len(attendances),
+        attendances=attendances
+    )  
+
+@router.get("/me/records", response_model=List[StudentAttendanceResponse])
+def get_my_attendance_records(
+    current_user: UserModel = Depends(get_current_user),
+    event_id: Optional[int] = Query(None),
+    status: Optional[AttendanceStatus] = Query(None),
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """
+    Get attendance records for the currently authenticated student
+    """
+    # Verify the user is a student
+    if not current_user.student_profile:
+        raise HTTPException(
+            status_code=403,
+            detail="Only students can access their own attendance records"
+        )
+
+    student = current_user.student_profile
+
+    # Query attendances with event names
+    query = db.query(
+        AttendanceModel,
+        Event.name.label('event_name')
+    ).join(
+        Event, AttendanceModel.event_id == Event.id
+    ).filter(
+        AttendanceModel.student_id == student.id
+    )
+
+    if event_id:
+        query = query.filter(AttendanceModel.event_id == event_id)
+    if status:
+        query = query.filter(AttendanceModel.status == status)
+
+    results = query.order_by(
+        AttendanceModel.time_in.desc()
+    ).offset(skip).limit(limit).all()
+
+    # Process results
+    attendances = []
+    for attendance, event_name in results:
+        duration = None
+        if attendance.time_out:
+            duration = int((attendance.time_out - attendance.time_in).total_seconds() / 60)
+
+        attendances.append(StudentAttendanceRecord(
+            id=attendance.id,
+            event_id=attendance.event_id,
+            event_name=event_name,
+            time_in=attendance.time_in,
+            time_out=attendance.time_out,
+            status=attendance.status,
+            method=attendance.method,
+            notes=attendance.notes,
+            duration_minutes=duration
+        ))
+
+    return [StudentAttendanceResponse(
+        student_id=student.student_id,
+        student_name=f"{current_user.first_name} {current_user.last_name}",
+        total_records=len(attendances),
+        attendances=attendances
+    )]      
+
+
+
+@router.get("/events/{event_id}/report", response_model=AttendanceReportResponse)
+def get_event_attendance_report(
+    event_id: int,
+    program_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate an attendance report for a specific event with optional program filter
+    Returns data in format:
+    {
+        "event_name": "Annual Science Fair",
+        "event_date": "April 10, 2025",
+        "event_location": "Main Auditorium",
+        "total_participants": 21,
+        "attendees": 13,
+        "absentees": 8,
+        "attendance_rate": 62.0,
+        "programs": [{"id": 1, "name": "Computer Science"}, ...],
+        "program_breakdown": [
+            {"program": "Computer Science", "total": 10, "present": 7, "absent": 3},
+            ...
+        ]
+    }
+    """
+    # Get basic event info
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # Get all programs associated with this event for the filter dropdown
+    programs = db.query(Program).join(
+        event_program_association,
+        Program.id == event_program_association.c.program_id
+    ).filter(
+        event_program_association.c.event_id == event_id
+    ).all()
+
+    # Base query for attendance counts
+    query = db.query(
+        AttendanceModel.status,
+        func.count(AttendanceModel.id).label("count")
+    ).filter(
+        AttendanceModel.event_id == event_id
+    )
+
+    # Apply program filter if specified
+    if program_id:
+        query = query.join(
+            StudentProfile,
+            AttendanceModel.student_id == StudentProfile.id
+        ).filter(
+            StudentProfile.program_id == program_id
+        )
+
+    # Get attendance counts by status
+    attendance_counts = query.group_by(AttendanceModel.status).all()
+
+    # Calculate totals
+    counts = {status: count for status, count in attendance_counts}
+    total_participants = sum(counts.values())
+    attendees = counts.get("present", 0)
+    absentees = counts.get("absent", 0) + counts.get("excused", 0)
+    attendance_rate = (attendees / total_participants * 100) if total_participants > 0 else 0
+
+    # Get breakdown by program
+    program_breakdown = db.query(
+        Program.name.label("program"),
+        func.count(AttendanceModel.id).label("total"),
+        func.sum(case((AttendanceModel.status == "present", 1), else_=0)).label("present"),
+        func.sum(case((AttendanceModel.status.in_(["absent", "excused"]), 1), else_=0)).label("absent")
+    ).join(
+        StudentProfile,
+        AttendanceModel.student_id == StudentProfile.id
+    ).join(
+        Program,
+        StudentProfile.program_id == Program.id
+    ).filter(
+        AttendanceModel.event_id == event_id
+    ).group_by(
+        Program.name
+    ).all()
+
+    return {
+        "event_name": event.name,
+        "event_date": event.start_datetime.strftime("%B %d, %Y"),
+        "event_location": event.location,
+        "total_participants": total_participants,
+        "attendees": attendees,
+        "absentees": absentees,
+        "attendance_rate": round(attendance_rate, 1),
+        "programs": [{"id": p.id, "name": p.name} for p in programs],
+        "program_breakdown": [
+            {
+                "program": item.program,
+                "total": item.total,
+                "present": item.present,
+                "absent": item.absent
+            } for item in program_breakdown
+        ]
+    }
+@router.get("/events/{event_id}/report", response_model=AttendanceReportResponse)
+def get_event_attendance_report(
+    event_id: int,
+    program_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate an attendance report for a specific event with optional program filter
+    Returns data in format:
+    {
+        "event_name": "Annual Science Fair",
+        "event_date": "April 10, 2025",
+        "event_location": "Main Auditorium",
+        "total_participants": 21,
+        "attendees": 13,
+        "absentees": 8,
+        "attendance_rate": 62.0,
+        "programs": [{"id": 1, "name": "Computer Science"}, ...],
+        "program_breakdown": [
+            {"program": "Computer Science", "total": 10, "present": 7, "absent": 3},
+            ...
+        ]
+    }
+    """
+    # Get basic event info
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # Get all programs associated with this event for the filter dropdown
+    programs = db.query(Program).join(
+        event_program_association,
+        Program.id == event_program_association.c.program_id
+    ).filter(
+        event_program_association.c.event_id == event_id
+    ).all()
+
+    # Base query for attendance counts
+    query = db.query(
+        AttendanceModel.status,
+        func.count(AttendanceModel.id).label("count")
+    ).filter(
+        AttendanceModel.event_id == event_id
+    )
+
+    # Apply program filter if specified
+    if program_id:
+        query = query.join(
+            StudentProfile,
+            AttendanceModel.student_id == StudentProfile.id
+        ).filter(
+            StudentProfile.program_id == program_id
+        )
+
+    # Get attendance counts by status
+    attendance_counts = query.group_by(AttendanceModel.status).all()
+
+    # Calculate totals
+    counts = {status: count for status, count in attendance_counts}
+    total_participants = sum(counts.values())
+    attendees = counts.get("present", 0)
+    absentees = counts.get("absent", 0) + counts.get("excused", 0)
+    attendance_rate = (attendees / total_participants * 100) if total_participants > 0 else 0
+
+    # Get breakdown by program
+    program_breakdown = db.query(
+        Program.name.label("program"),
+        func.count(AttendanceModel.id).label("total"),
+        func.sum(case((AttendanceModel.status == "present", 1), else_=0)).label("present"),
+        func.sum(case((AttendanceModel.status.in_(["absent", "excused"]), 1), else_=0)).label("absent")
+    ).join(
+        StudentProfile,
+        AttendanceModel.student_id == StudentProfile.id
+    ).join(
+        Program,
+        StudentProfile.program_id == Program.id
+    ).filter(
+        AttendanceModel.event_id == event_id
+    ).group_by(
+        Program.name
+    ).all()
+
+    return {
+        "event_name": event.name,
+        "event_date": event.start_datetime.strftime("%B %d, %Y"),
+        "event_location": event.location,
+        "total_participants": total_participants,
+        "attendees": attendees,
+        "absentees": absentees,
+        "attendance_rate": round(attendance_rate, 1),
+        "programs": [{"id": p.id, "name": p.name} for p in programs],
+        "program_breakdown": [
+            {
+                "program": item.program,
+                "total": item.total,
+                "present": item.present,
+                "absent": item.absent
+            } for item in program_breakdown
+        ]
+    }    
