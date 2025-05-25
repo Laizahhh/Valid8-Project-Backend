@@ -70,6 +70,9 @@ class StudentProfile(Base):
     user = relationship("User", back_populates="student_profile")
     attendances = relationship("Attendance", back_populates="student", cascade="all, delete-orphan")
 
+    department = relationship("Department")  # REMOVED lazy="joined"
+    program = relationship("Program")        # REMOVED lazy="joined"
+
     
     # ===== ADD THIS METHOD =====
     def update_face_encoding(self, embedding: bytes):

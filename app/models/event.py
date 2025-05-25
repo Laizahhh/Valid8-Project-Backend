@@ -26,20 +26,20 @@ class Event(Base):
         "Department", 
         secondary=event_department_association, 
         back_populates="events",
-        lazy="joined"
+       
     )
     programs = relationship(
         "Program", 
         secondary=event_program_association, 
         back_populates="events",
-        lazy="joined"
+       
     )
      # Add this relationship
     ssg_members = relationship(
         "SSGProfile", 
         secondary=event_ssg_association,
         back_populates="assigned_events",
-        lazy="joined"
+        
     )
     attendances = relationship(
        "Attendance",

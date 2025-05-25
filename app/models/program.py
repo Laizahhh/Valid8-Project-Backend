@@ -15,11 +15,9 @@ class Program(Base):
         "Department",
         secondary=program_department_association,
         back_populates="programs",
-        lazy="joined"  # Always load departments
     )
     events = relationship(
         "Event",
         secondary=event_program_association,
         back_populates="programs",
-        lazy="joined"  # Always load events
     )

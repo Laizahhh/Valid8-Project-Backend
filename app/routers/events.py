@@ -127,6 +127,24 @@ def read_events(
     events = query.order_by(EventModel.start_datetime).offset(skip).limit(limit).all()
     return events
 
+# Add this endpoint to your router
+@router.get("/ongoing", response_model=list[EventSchema])
+def get_ongoing_events(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db)
+):
+    """Get all ongoing events"""
+    events = db.query(EventModel).options(
+        joinedload(EventModel.departments),
+        joinedload(EventModel.programs),
+        joinedload(EventModel.ssg_members).joinedload(SSGProfile.user)
+    ).filter(
+        EventModel.status == ModelEventStatus.ONGOING
+    ).order_by(EventModel.start_datetime).offset(skip).limit(limit).all()
+    
+    return events
+
 # 3. Get Single Event
 @router.get("/{event_id}", response_model=EventWithRelations)
 def read_event(
